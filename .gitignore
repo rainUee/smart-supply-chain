@@ -1,23 +1,26 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# Local .terraform directories
+.terraform/
 
-# dependencies
-/node_modules
-/.pnp
-.pnp.js
+# Terraform plan output files
+*.tfplan
 
-# testing
-/coverage
+# Sensitive variable files (if used)
+*.tfvars
+*.tfvars.json
 
-# production
-/build
+# Terraform state files
+terraform.tfstate
+terraform.tfstate.backup
 
-# misc
-.DS_Store
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# Crash log files
+crash.log
 
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI configuration file (if exists in project dir)
+.terraformrc
+terraform.rc
