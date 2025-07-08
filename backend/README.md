@@ -41,7 +41,7 @@ pip install -r requirements.txt
 复制环境变量模板并配置：
 
 ```bash
-cp env.example .env
+cp env.production.template .env
 ```
 
 编辑 `.env` 文件，配置以下必要参数：

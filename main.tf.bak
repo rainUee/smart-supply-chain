@@ -184,16 +184,14 @@ resource "aws_security_group" "ec2" {
     to_port         = 8000
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
-    description     = "HTTP from ALB"
   }
 
-  # SSH from bastion only
+  # SSH access for debugging (optional)
   ingress {
-    from_port       = 22
-    to_port         = 22
-    protocol        = "tcp"
-    security_groups = [aws_security_group.bastion.id]
-    description     = "SSH from bastion host"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]  # Consider restricting to your IP
   }
 
   egress {
@@ -246,8 +244,6 @@ resource "aws_db_instance" "postgres" {
   max_allocated_storage = 100
   storage_type          = "gp2"
   storage_encrypted     = true
-
-  multi_az = true
   
   db_name  = "smart_supply_chain"
   username = var.db_username
@@ -365,7 +361,7 @@ resource "aws_launch_template" "app" {
 
   vpc_security_group_ids = [aws_security_group.ec2.id]
 
-  user_data = base64encode(templatefile("${path.module}/scripts/user_data.sh", {
+  user_data = base64encode(templatefile("${path.module}/user_data.sh", {
     db_host     = aws_db_instance.postgres.endpoint
     db_name     = aws_db_instance.postgres.db_name
     db_user     = aws_db_instance.postgres.username
@@ -450,9 +446,9 @@ resource "aws_lb_listener" "app" {
 # Auto Scaling Group
 resource "aws_autoscaling_group" "app" {
   name                = "${var.project_name}-asg"
-  desired_capacity    = 2
-  max_size           = 4
-  min_size           = 2
+  desired_capacity    = 1
+  max_size           = 3
+  min_size           = 1
   target_group_arns  = [aws_lb_target_group.app.arn]
   vpc_zone_identifier = aws_subnet.private[*].id
 
@@ -536,203 +532,4 @@ output "asg_name" {
 output "asg_instances" {
   value = aws_autoscaling_group.app.id
   description = "Auto Scaling Group ID"
-}
-
-resource "aws_instance" "bastion" {
-  ami           = data.aws_ami.amazon_linux.id
-  instance_type = "t3.micro"
-  key_name      = aws_key_pair.app_key.key_name
-
-  subnet_id                   = aws_subnet.public[0].id
-  vpc_security_group_ids      = [aws_security_group.bastion.id]
-  associate_public_ip_address = true
-
-  user_data = base64encode(templatefile("${path.module}/scripts/bastion_user_data.sh", {}))
-
-  tags = {
-    Name = "${var.project_name}-bastion"
-    Type = "BastionHost"
-  }
-}
-
-resource "aws_security_group" "bastion" {
-  name_prefix = "${var.project_name}-bastion-"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["142.68.49.200/32"]
-    description = "SSH access to bastion"
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "${var.project_name}-bastion-sg"
-  }
-}
-
-output "bastion_public_ip" {
-  description = "Public IP of the bastion host"
-  value       = aws_instance.bastion.public_ip
-}
-
-output "bastion_ssh_command" {
-  description = "SSH command to connect to bastion host"
-  value       = "ssh -i ~/.ssh/id_rsa ec2-user@${aws_instance.bastion.public_ip}"
-}
-
-output "app_servers_connection" {
-  description = "How to connect to app servers via bastion"
-  value       = "1. SSH to bastion: ssh -i ~/.ssh/id_rsa ec2-user@${aws_instance.bastion.public_ip}\n2. Run: ./connect-app"
-}
-
-# output private ip for debugging
-output "app_servers_private_ips" {
-  description = "Command to get app servers private IPs"
-  value       = "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names ${var.project_name}-asg --query 'AutoScalingGroups[0].Instances[*].InstanceId' --output text | xargs -I {} aws ec2 describe-instances --instance-ids {} --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text"
-}
-
-# CloudWatch Log Groups
-resource "aws_cloudwatch_log_group" "application" {
-  name              = "/aws/ec2/${var.project_name}/application"
-  retention_in_days = 14
-
-  tags = {
-    Name = "${var.project_name}-app-logs"
-  }
-}
-
-resource "aws_cloudwatch_log_group" "system" {
-  name              = "/aws/ec2/${var.project_name}/system"
-  retention_in_days = 7
-
-  tags = {
-    Name = "${var.project_name}-system-logs"
-  }
-}
-
-# CloudWatch Alarms
-resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
-  alarm_name          = "${var.project_name}-rds-high-cpu"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = "2"
-  metric_name         = "CPUUtilization"
-  namespace           = "AWS/RDS"
-  period              = "300"
-  statistic           = "Average"
-  threshold           = "70"
-  alarm_description   = "This metric monitors RDS cpu utilization"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
-
-  dimensions = {
-    DBInstanceIdentifier = aws_db_instance.postgres.id
-  }
-
-  tags = {
-    Name = "${var.project_name}-rds-cpu-alarm"
-  }
-}
-
-resource "aws_cloudwatch_metric_alarm" "rds_free_storage" {
-  alarm_name          = "${var.project_name}-rds-low-storage"
-  comparison_operator = "LessThanThreshold"
-  evaluation_periods  = "1"
-  metric_name         = "FreeStorageSpace"
-  namespace           = "AWS/RDS"
-  period              = "300"
-  statistic           = "Average"
-  threshold           = "2000000000" # 2GB in bytes
-  alarm_description   = "This metric monitors RDS free storage space"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
-
-  dimensions = {
-    DBInstanceIdentifier = aws_db_instance.postgres.id
-  }
-
-  tags = {
-    Name = "${var.project_name}-rds-storage-alarm"
-  }
-}
-
-# CloudWatch Dashboard
-resource "aws_cloudwatch_dashboard" "main" {
-  dashboard_name = "${var.project_name}-dashboard"
-
-  dashboard_body = jsonencode({
-    widgets = [
-      {
-        type   = "metric"
-        x      = 0
-        y      = 0
-        width  = 12
-        height = 6
-
-        properties = {
-          metrics = [
-            ["AWS/EC2", "CPUUtilization", "AutoScalingGroupName", aws_autoscaling_group.app.name],
-            ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", aws_db_instance.postgres.id]
-          ]
-          view    = "timeSeries"
-          stacked = false
-          region  = var.aws_region
-          title   = "CPU Utilization"
-          period  = 300
-        }
-      },
-      {
-        type   = "metric"
-        x      = 0
-        y      = 6
-        width  = 12
-        height = 6
-
-        properties = {
-          metrics = [
-            ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", aws_lb.app.arn_suffix],
-            [".", "TargetResponseTime", ".", "."]
-          ]
-          view    = "timeSeries"
-          stacked = false
-          region  = var.aws_region
-          title   = "Load Balancer Metrics"
-          period  = 300
-        }
-      }
-    ]
-  })
-}
-
-# SNS Topic for Alerts
-resource "aws_sns_topic" "alerts" {
-  name = "${var.project_name}-alerts"
-
-  tags = {
-    Name = "${var.project_name}-alerts"
-  }
-}
-
-# SNS Topic Subscription (Email)
-resource "aws_sns_topic_subscription" "email_alerts" {
-  topic_arn = aws_sns_topic.alerts.arn
-  protocol  = "email"
-  endpoint  = var.alert_email # Add this variable
-}
-
-# Additional variables needed
-variable "alert_email" {
-  description = "Email address for alerts"
-  type        = string
-  default     = "sh822424@dal.ca"
-}
-
-output "cloudwatch_dashboard_url" {
-  value = "https://${var.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards:name=${aws_cloudwatch_dashboard.main.dashboard_name}"
 }
