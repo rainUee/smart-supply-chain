@@ -21,6 +21,7 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 
-# CLI configuration file (if exists in project dir)
-.terraformrc
-terraform.rc
+# Local execution files
+.terraform.lock.hcl
+*.sql
+
